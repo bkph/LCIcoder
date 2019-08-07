@@ -2,12 +2,12 @@
 
 // LCIcoder.cpp
 
-// (*) Encode (and decode) LCI (Location configuration information) strings, which contain:
-//		(i) LCI element, (ii) Z subelement, (iii) Usage Rules/Policy subelement, (iv) colocated BSSIDS
+// (*) Encode (and decode) LCI (Location Configuration Information) strings, which contain:
+//		(i) LCI element, (ii) Z subelement, (iii) Usage Rules/Policy subelement, (iv) colocated BSSIDS.
 //		The LCI string is used in hostapd.conf to provide geodetic location information for the FTM RTT responder,
 //		see 9.4.2.22.10 "Part 11: Wireless LAN Medium Access Control (MAC) and Physical Layer (PHY) Specifications"
-//		Its contents could have been provided by RangingResult.getLci() in	Android - but  that is blacklisted!,
-//		It provides input data for Android's RangingResult.getResponderLocation() parser.
+//		Its contents could have been revealed by RangingResult.getLci() in Android - but  that is blacklisted!
+//		It does provide input data for Android's RangingResult.getResponderLocation() parser.
 
 //		Location configuration information (LCI): As defined in IETF RFC 6225: 
 //		includes latitude, longitude, and altitude, with uncertainty values for each. 
@@ -24,15 +24,16 @@
 	"There is no express or implied warranty, including merchantability or fitness" \
 	"for a particular purpose." 
 
-#define  VERSION   "Version 0.8"
+#define  VERSION   "Version 0.8.1"
 
 ////////////////////////////////////////////////////////////////////////////////////////////////
 
 // TODO: maxBSSIDindicator is not zero in current Android implementation - should be zero 
 
-// TODO: ALTITUDE_ABOVE_GROUND=3 missing in Android ResponderLocation class 
+// TODO: ALTITUDE_ABOVE_GROUND=3 case missing in Android ResponderLocation class 
 
-// https://issuetracker.google.com/135678941 Location Information (LCR and LCI) missing in android.net.wifi.rtt.RangingResult
+// See also https://issuetracker.google.com/135678941
+// Location Information (LCR and LCI) missing in android.net.wifi.rtt.RangingResult
 
 ////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -54,17 +55,17 @@
 
 //////////////////////////////////////////////////////////////////////////////////////////////
 
-// The only valid version number for the LCI field (currently)
+// The only valid version number for the LCI field (currently):
 #define LCI_VERSION_1 1
 
 // Latitude, longitude, altitude uncertainties are unsigned quantities (6 bit), 
 // and values greater than 34 are reserved (IETF RFC 6225)	
-// NOTE: MAX uncertainy *codes* corresponds to minimum *uncertainty*
+// NOTE: *maximum* uncertainy codes corresponds to *minimum* uncertainty
 #define MAX_LCI_UNCERTAINTY 34
 
 // STA_Height_Above_Floor_Uncertainty is an unsigned quantity (8 bit)
 // and values greater than 24 are reserved.
-// NOTE: MAX uncertainy *codes* corresponds to minimum *uncertainty*
+// NOTE: *maximum* uncertainy codes corresponds to *minimum* uncertainty
 #define MAX_Z_UNCERTAINTY 24
 
 #define MEASURE_TOKEN 1
@@ -113,10 +114,10 @@ int verboseflag = 1;	// -v
 int traceflag = 0;		// -t
 int debugflag = 0;		// -d
 
-int checkflag = 0;		// -c (check result after decoding or encoding)
+int checkflag = 0;		// -c (check result after encoding or decoding)
 
 //	Note: in the specification 0 uncertainty means uncertainty is *unknown*
-//  Can treat 0 on command line as *smallest representable uncertainty* instead:
+//  Can treat 0 on command line instead as *smallest representable uncertainty*:
 
 int	smallestflag = 0;	//  0 => zero uncertainty means *unknown* uncertainty code (default)
 //	int	smallestflag = 1;	// 1 => zero uncertainty means *smallest* possible uncertainty code
@@ -130,7 +131,7 @@ int sampleflag = 0;			// run an example of decoding and encoding an LCI string
 
 ///////////////////////////////////////////////////////////////////////////////
 
-// Global variables used when building an LCI string - set from command line.
+// Global variables used when encoding an LCI string - set from command line.
 // Also, variables set by decoding a LCI string given on the command line (-lci=...)
 
 // Needed for LCI subelement:
@@ -161,7 +162,7 @@ int LCI_version = LCI_VERSION_1;	// the only value currently defined in IETF RFC
 
 // Needed for Z subelement:
 
-int expected_to_move = 0;	// should be 0 (2 bits) for Android getResponderLocation()
+int expected_to_move = 0;	// 2 bits - must be zero for Android getResponderLocation()
 double sta_floor = 0, sta_height_above_floor = 0, sta_height_above_floor_uncertainty = 0;
 
 // Needed for Usage Rules/Policy subelement:
@@ -175,9 +176,9 @@ int expiration = 0;		// expiration time (hours) (should be 0 unless retention_ex
 
 char const * lcistring = NULL;		// lci string to decode if given on command line using -lci=...
 
-int bssid_index = 0;					// points to next available slot in BSSIDS array
+int bssid_index = 0;				// points to next available slot in BSSIDS array
 
-int max_bssids = 9;
+int max_bssids = 10;
 
 char const **BSSIDS = NULL;			// array of strings of BSSIDs
 
@@ -190,7 +191,7 @@ char const **BSSIDS = NULL;			// array of strings of BSSIDs
 const char INLINE *strndup(const char *str, int nlen) {
 	char *strnew = (char *) malloc(nlen+1);
 //	strncpy(strnew, str, nlen);	// generic C version
-	strncpy_s(strnew, nlen+1, str, nlen);	// "safe" 
+	strncpy_s(strnew, nlen+1, str, nlen);	// Windows "safe" version
 	strnew[nlen]='\0';	// null terminate
 	return strnew;
 }
@@ -310,6 +311,26 @@ int isValidBSSID (const char *str) {	// check MAC address format
 	else return 0;	// bad format
 }
 
+// extract array of BSSID strings from comma-separated list on command line
+
+void extractBSSID (const char *str) {
+	const char *BSSID;
+	while (*str != '\0') {
+		if (bssid_index >= max_bssids) {
+			max_bssids *= 2;
+			BSSIDS = (const char **) realloc(BSSIDS, (max_bssids+1) * sizeof(const char *));
+			if (BSSIDS == NULL) exit(1);
+		}
+		const char *strend = strchr(str, ',');
+		if (strend == NULL) strend = str + strlen(str);
+		BSSID = strndup(str, strend-str);
+		if (isValidBSSID(BSSID)) BSSIDS[bssid_index++] = BSSID;
+		else printf("ERROR: invalid colocated BSSID %s\n", BSSID);
+		if (*strend == '\0') break;
+		str = strend+1;
+	}
+}
+
 // propagate sign bit from number with nlen bits to long long int
 
 long long INLINE propagate_sign(long long res, int nlen) {
@@ -416,12 +437,13 @@ void checksettings (void) {
 // This encodes the LCI field (data part of the LCI element)
 
 // This is based on the IEEE P802.11-REVmc/D8.0 spec section 9.4.2.22, under Measurement Report Element
-// (detailed example on page 857)
+// (as per detailed example on page 857)
 
 // Note: LCI field sequence of conversions (two flips of bit order):
 // binary, MSB first per field ->
 // binary, LSB first per field ->
-// binary, rearranged into octets, LSB first per octet ->
+// binary, rearranged into octets
+// binary, LSB first per octet ->
 // binary, MSB first per octet
 
 int encodeLCIfield(char *str, int nbyt) {
@@ -429,14 +451,14 @@ int encodeLCIfield(char *str, int nbyt) {
 	putoctet(str, nbyt++, LCI_CODE);	// LCI subelement
 	putoctet(str, nbyt++, 16);			// length
 
-	int indx = nbyt << 3;
+	int indx = nbyt << 3;	// bit index 
 	if (verboseflag) printf("Encode LCI field ID %d (byte %d)\n", LCI_CODE, nbyt);
 
 	// longitude and latitude as binary number with 25 bits after the dot
 	long long Latitude  = (long long)roundl(latitude  * (1 << 25));
 	long long Longitude = (long long)roundl(longitude * (1 << 25));
 	// atltitude as binary number with 8 bits after the dot
-	int Altitude = (int)round(altitude * 256);  
+	int Altitude = (int)round(altitude * (1 << 8));  
 
 	int Latitude_Uncertainty, Longitude_Uncertainty, Altitude_Uncertainty;
 	if (latitude_uncertainty > 0) Latitude_Uncertainty = encodebinarydot(latitude_uncertainty, 8);
@@ -488,7 +510,7 @@ int encodeZfield(char *str, int nbyt) {
 	if (verboseflag) printf("Encode Z field ID %d (byte %d)\n", Z_CODE, nbyt);
 	
 	putoctet(str, nbyt++, Z_CODE);	// ID
-	putoctet(str, nbyt++, 6);	// length
+	putoctet(str, nbyt++, 6);		// length
 	
 	int  STA_Floor_Info,  STA_Height_Above_Floor,  STA_Height_Above_Floor_Uncertainty;
 	STA_Floor_Info = (expected_to_move & 0x03) | ((int)(sta_floor * 16.0)) << 2;
@@ -496,7 +518,7 @@ int encodeZfield(char *str, int nbyt) {
 	if (sta_height_above_floor_uncertainty > 0)
 		STA_Height_Above_Floor_Uncertainty = encodebinarydot(sta_height_above_floor_uncertainty, 11);
 	else if (! smallestflag) STA_Height_Above_Floor_Uncertainty = 0;	// implies height uncertainty unknown
-	else STA_Height_Above_Floor_Uncertainty = MAX_Z_UNCERTAINTY;
+	else STA_Height_Above_Floor_Uncertainty = MAX_Z_UNCERTAINTY;	// least uncertain
 	if (STA_Height_Above_Floor_Uncertainty > MAX_Z_UNCERTAINTY)
 		STA_Height_Above_Floor_Uncertainty = MAX_Z_UNCERTAINTY; // values 25 or higher are reserved
 	if (verboseflag) {
@@ -519,17 +541,21 @@ int encodeZfield(char *str, int nbyt) {
 }
 
 int encodeUsageField(char *str, int nbyt) {
-	int nlen;	// length of expiration field 
 	if (verboseflag) printf("Encode Usage Field ID %d (byte %d)\n", USAGE_CODE, nbyt);
+	int nlen = retention_expires_present ? 3 : 1; // default length of expiration field 
 	if (retention_expires_present) {
-		nlen = 3;	// force it if needed
-		if (expiration == 0)
+		if (expiration == 0) {
 			printf("WARNING: Inconsistency: Retention_expires_present true but expiration == 0\n");
+			retention_expires_present = false;	// override
+			nlen = 1;
+		}
 	}
 	else {
-		nlen = 1;	// force it if needed
-		if (expiration != 0)
+		if (expiration != 0) {
 			printf("WARNING: Inconsistency: Retention_expires_present false but expiration != 0\n");
+			retention_expires_present = true;	// override
+			nlen = 3;
+		}
 	}
 
 	putoctet(str, nbyt++, USAGE_CODE);	// ID
@@ -591,8 +617,8 @@ int encodeColocatedBSSID(char *str, int nbyt, int nbssids) {
 	if (bssid_index == 0) return nbyt;	// nothing to do
 //	int maxBSSIDindicator = 0;	// official value (9.4.2.22.10 Fig.	9-224)
 	int maxBSSIDindicator = bssid_index;	// current Android implementation
-	putoctet(str, nbyt++, COLOCATED_BSSID); 
-	putoctet(str, nbyt++, nbssids*6 + 1); 
+	putoctet(str, nbyt++, COLOCATED_BSSID); // ID
+	putoctet(str, nbyt++, nbssids*6 + 1);	// length
 	putoctet(str, nbyt++, maxBSSIDindicator);	// should really be 0...
 	for (int k=0; k < bssid_index; k++) 
 		nbyt = placeBSSID(str, nbyt, BSSIDS[k]);
@@ -601,28 +627,30 @@ int encodeColocatedBSSID(char *str, int nbyt, int nbssids) {
 }
 
 int decodeColocatedBSSID(const char *str, int nbyt, int nlen) {	// str points past ID and length octets
-	int k;
 	int maxBSSIDindicator = getoctet(str, nbyt++);
 	if (maxBSSIDindicator != 0) {
-		printf("WARNING: maxBSSIDindicator %d != 0\n", maxBSSIDindicator);	// official value (9.4.2.22.10 Fig.	9-224)
+		printf("WARNING: maxBSSIDindicator %d != 0\n",
+			   maxBSSIDindicator);	// official value (9.4.2.22.10 Fig.	9-224)
 		if (maxBSSIDindicator != (nlen-1)/6)
-			printf("WARNING: maxBSSIDindicator %d != %d\n", maxBSSIDindicator, (nlen-1)/6);	// current Android implementation
+			printf("WARNING: maxBSSIDindicator %d != %d\n",
+				   maxBSSIDindicator, (nlen-1)/6);	// current Android implementation
 	}
-	// Note: base the number of iterations on length, not maxBSSIDindicator,
+	// Note: base the number of BSSIDs on length of field, not maxBSSIDindicator,
 	// since maxBSSIDindicator is *supposed* to be zero
-	for (k = 0; k < (nlen-1)/6; k++) {
+	int nBSSID = (nlen-1)/6;
+	for (int k = 0; k < nBSSID; k++) {
 		BSSIDS[k] = strndup(str+nbyt*2, 6*2);
 		nbyt += 6;
 		if (! isValidBSSID(BSSIDS[k])) printf("ERROR: invalid BSSID %s\n", BSSIDS[k]);
 	}
-	bssid_index = k;
+	bssid_index = nBSSID;	// k
 	return nbyt;
 }
 
 // The Co-Located BSSID list subelement is used to report the list of BSSIDs 
 // of the BSSs that share the same antenna connector with the reporting STA.
 // (i.e., it is not really a list of neighboring BSSIDs...)
-// (Can this appear as subelement of *both* LCI and of CIVIC elements ?)
+// TODO: Can this appear as subelement of *both* LCI and of CIVIC elements ?
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -631,7 +659,8 @@ int decodeColocatedBSSID(const char *str, int nbyt, int nlen) {	// str points pa
 // NOTE: LCI field sequence of conversions (two flips of bit order):
 // binary, MSB first per field ->
 // binary, LSB first per field ->
-// binary, rearranged into octets, LSB first per octet ->
+// binary, rearranged into octets
+// binary, LSB first per octet ->
 // binary, MSB first per octet
 
 // writes values directly into global variables...
@@ -652,7 +681,7 @@ int decodeLCIfield(const char *str, int indx) {
 	else latitude_uncertainty = decodebinarydot(Latitude_Uncertainty, 8);
 
 	long long Latitude = getbits(str, indx, 34);
-	indx += 34;
+	indx += 34;	// advance 34 bits
 	Latitude = propagate_sign(Latitude, 34);
 	latitude = Latitude / (double)(1 << 25);
 
@@ -837,7 +866,6 @@ void decodeLCIstring (const char *str) {
 				nbyt += nlen;
 				break;	// don't even try to decode it...
 			}
-//			parameters = getnumber(str, nbyt++, 1);
 			parameters = getoctet(str, nbyt++);
 			retransmission_allowed = ((parameters & 1) != 0);
 			retention_expires_present = ((parameters & 2) != 0);
@@ -850,18 +878,22 @@ void decodeLCIstring (const char *str) {
 				printf("STA_Location_Policy %d -> %s\n",
 					   STA_location_policy, STA_location_policy ? "true":"false");
 			}
-			if (retention_expires_present && nlen != 3)
-				printf("WARNING: Inconsistent fields: retention_expires_present true with nlen %d != 3\n", nlen);
-			if (!retention_expires_present && nlen != 1)
-				printf("WARNING: Inconsistent fields: retention_expires_present false with nlen %d != 1\n", nlen);
-			if (nlen == 3) {
+			if (nlen == 1) expiration = 0;
+			else if (nlen == 3) {
 				expiration = getnumber(str, nbyt, 2);
 				if (verboseflag) printf("Expiration %d hours\n", expiration);
-//				if (expiration != 0) printf("WARNING: Android will not provide location information because expiration != 0\n");
+ //				WARNING: Android will not provide location information if expiration != 0
 				nbyt += nlen - 1;
 			}
+//			else printf("ERROR: length of Usage field %d octets (not 1 or 3)\n", nlen); 
+			if (retention_expires_present && nlen != 3)
+				printf("WARNING: Inconsistent fields: retention_expires_present true with nlen %d != 3\n", nlen);
+//			if (!retention_expires_present && nlen != 1)
+			if (!retention_expires_present && nlen != 1 && expiration != 0)
+				printf("WARNING: Inconsistent fields: retention_expires_present false with nlen %d != 1\n", nlen);
 			// NOTE: If the Usage rights subelement (06) does not have an expiration bit set, 
 			// then there should be no expiration time field. 
+			// NOTE:the above ignores the common error of nlen == 3 and expiration == 0
 			// (The Usage Rights subelement should therefore be simply 06 01 01)
 			if (verboseflag) printf("\n");
 			break;
@@ -1039,26 +1071,6 @@ void do_US_MTV(void) {
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
-// extract array of BSSID strings from comma-separated list on command line
-
-void extractBSSID (const char *str) {
-	const char *BSSID;
-	while (*str != '\0') {
-		if (bssid_index >= max_bssids) {
-			max_bssids *= 2;
-			BSSIDS = (const char **) realloc(BSSIDS, (max_bssids+1) * sizeof(const char *));
-			if (BSSIDS == NULL) exit(1);
-		}
-		const char *strend = strchr(str, ',');
-		if (strend == NULL) strend = str + strlen(str);
-		BSSID = strndup(str, strend-str);
-		if (isValidBSSID(BSSID)) BSSIDS[bssid_index++] = BSSID;
-		else printf("ERROR: invalid colocated BSSID %s\n", BSSID);
-		if (*strend == '\0') break;
-		str = strend+1;
-	}
-}
-
 void showusage(void) {
 	printf("-v\t\tFlip verbose mode %s\n", verboseflag ? "off":"on");
 	printf("-t\t\tFlip trace mode %s\n", traceflag ? "off":"on");
@@ -1154,6 +1166,10 @@ int commandline(int argc, const char *argv[]) {
 		else if (strncmp(arg, "-heightunc=", 11) == 0) {	// in meters
 			if (sscanf_s(arg + 11, "%lg", &sta_height_above_floor_uncertainty) < 1) printf("ERROR: %s\n", arg);
 		}
+//		parameters for construction of colocated BSSIDs subelement
+		else if (_strnicmp(arg, "-BSSID=", 7) == 0) {	// colocated BSSID
+			extractBSSID(arg);
+		}
 //		Should not normally use or need any of the following:
 		else if (_strnicmp(arg, "-altitude_type=", 15) == 0) {	// prefer meters
 			if (sscanf_s(arg + 15, "%d", &Altitude_Type) < 1) printf("ERROR: %s\n", arg);
@@ -1167,10 +1183,6 @@ int commandline(int argc, const char *argv[]) {
 		}
 		else if (_strnicmp(arg, "-version=", 9) == 0) {	// should always be LCI_Version_1
 			if (sscanf_s(arg + 9, "%d", &LCI_version) < 1) printf("ERROR: %s\n", arg);
-		}
-//		parameters for construction of colocated BSSIDs subelement
-		else if (_strnicmp(arg, "-BSSID=", 7) == 0) {	// colocated BSSID
-			extractBSSID(arg);
 		}
 //		More obscure ones should not normally use or need any of them:
 		else if (strcmp(arg, "-movable") == 0) expected_to_move = !expected_to_move;	// 0
@@ -1188,6 +1200,7 @@ int commandline(int argc, const char *argv[]) {
 		else if (strcmp(arg, "-?") == 0) showusage();
 		else if (strcmp(arg, "-help") == 0) showusage();
 		else if (strcmp(arg, "-version") == 0) printf("%s %s\n", "LCIcoder", version);
+		else if (strcmp(arg, "-copyright") == 0) printf("%s %s\n", "LCIcoder", copyright);
 		else printf("ERROR: %s\n", arg);
 		firstarg++;
 	}
@@ -1214,7 +1227,7 @@ void initialize_arrays (void) {
 	BSSIDS = (char const **) malloc((max_bssids+1) * sizeof(char *));
 	if (BSSIDS == NULL) exit(1);
 //	for (int k = 0; k <= MAX_BSSID; k++) BSSIDS[k] = NULL;	// or...
-	memset(BSSIDS, 0, max_bssids * sizeof(char *));
+	memset(BSSIDS, 0, (max_bssids+1) * sizeof(char *));
 }
 
 int main(int argc, const char *argv[]) {
@@ -1233,7 +1246,6 @@ int main(int argc, const char *argv[]) {
 			printf("lci=%s\n", str);
 			free(str);
 		}
-//		return 0;
 	}
 
 //	Are arguments for constructing LCI string given on command line ?
@@ -1248,11 +1260,10 @@ int main(int argc, const char *argv[]) {
 			decodeLCIstring(str);
 		}
 		free(str);
-//		return 0;
 	}
 	else if (sampleflag) {	// run an example...
 		do_Sydney_Opera();
-//		do_US_MTV();
+//		do_US_MTV();	// alternate example
 	}
 
 	freeColocatedBSSIDs();
@@ -1261,9 +1272,9 @@ int main(int argc, const char *argv[]) {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-// LCI element: LCI subelement, Z subelement, USAGE subelement, BSSIDS subelements.
+// LCI element:  LCI subelement, Z subelement, USAGE subelement, BSSIDS subelements.
 
-// CIVIC element: STA location address, MAP image subelements.
+// CIVIC element:  STA location address, MAP image subelements.
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -1275,7 +1286,10 @@ int main(int argc, const char *argv[]) {
 // LCIcoder -lci=010008001052834d12efd2b08b9b4bf1cc2c0000410406000000000010060101
 // 01 00 08  00 10 51834d12efd1b08b9b4bf1cc2c000041   04 06 0000 000000 10  06 01 01
 
-// Sydney Opera House encoding
+// LCIcoder -lci="010008001052834d12efd2b08b9b4bf1cc2c00004106030100000406000000000012"
+// 01 00 08  00 10 52834d12efd2b08b9b4bf1cc2c000041  06 03 01 0000 04 06 000000000012
+
+// Sydney Opera House encoding (with uncertainties)
 // LCIcoder -lat=-33.8570095 -lon=151.2152005 -alt=11.1992  -latunc=0.000976563 -lonunc=0.000976563 -altunc=64 -floor=0 -height=0  -heightunc=0.03125
 
 // Sample usage for encoding (without specifying uncertainties)
@@ -1285,9 +1299,8 @@ int main(int argc, const char *argv[]) {
 // LCIcoder -lat=42.3616375‬ -lon=-71.09063 -alt=20 -latunc=0.00063 -lonunc=0.00078 -altunc=15
 // lci=010008001052234a2e15923c6674dc1101500000410406000000000000060101
 
-// Compulab
+// Compulab:
 // LCIcoder -lat=32.659385 -lon=35.0997755 -alt=50 -latunc=0.00028 -lonunc=0.00040 -altunc=10
 // lci=010008001053ba6654109371c58c111101c80000410406000000000000060101
 
 ////////////////////////////////////////////////////////////////////////////////////////
-
